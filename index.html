@@ -97,7 +97,16 @@
 
 <script src="https://unpkg.com/ethers@5.7.2/dist/ethers.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
-
+<script type="module">
+        try {
+            const { sdk } = await import('https://esm.sh/@farcaster/miniapp-sdk');
+            window.sdk = sdk;
+            await sdk.actions.ready({ disableNativeGestures: true });
+            console.log('✅ Farcaster SDK initialized');
+        } catch (error) {
+            console.error('❌ Farcaster SDK failed:', error);
+        }
+</script>
 </body>
 </html>
 
