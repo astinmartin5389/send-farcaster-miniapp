@@ -172,9 +172,10 @@
     </script>
 
     <script>
-        let fcProvider;
+        let provider;
         let farcasterSDK;
         let isConnected = false;
+        let userAddress = null;
 
         // Helper for Logs
         const log = (msg) => {
@@ -193,28 +194,40 @@
                     document.getElementById('topBar').style.visibility = 'visible';
                     document.getElementById('username').innerText = `@${context.user.username}`;
                     document.getElementById('pfp').src = context.user.pfpUrl;
+                    log(`Logged in as @${context.user.username}`);
                 }
             } catch(e) { 
                 console.error('Failed to load user context:', e);
                 log('Failed to load user context');
             }
 
-            // 2. Setup Provider using Farcaster SDK
+            // 2. Get the provider from SDK
             try {
-                // Get the wallet instance from SDK
-                const wallet = farcasterSDK.wallet;
-                fcProvider = wallet.getEthereumProvider();
+                // Get the wallet provider from SDK
+                provider = farcasterSDK.wallet.getEthereumProvider();
+                
+                if (!provider) {
+                    log('No wallet provider available');
+                    return;
+                }
                 
                 // Check if already connected
-                const accounts = await fcProvider.request({ method: 'eth_accounts' });
-                if (accounts && accounts.length > 0) {
-                    isConnected = true;
-                    showApp();
-                    log('Already connected to wallet');
+                try {
+                    const accounts = await provider.request({ method: 'eth_accounts' });
+                    if (accounts && accounts.length > 0) {
+                        userAddress = accounts[0];
+                        isConnected = true;
+                        showApp();
+                        log(`Connected to wallet: ${userAddress.substring(0, 6)}...`);
+                    } else {
+                        log('Wallet not connected');
+                    }
+                } catch (e) {
+                    log('Wallet connection check failed');
                 }
             } catch (e) { 
-                console.log("Not connected yet:", e.message);
-                log('Wallet not connected');
+                console.log("Provider error:", e.message);
+                log('Wallet provider error');
             }
         });
 
@@ -223,17 +236,17 @@
         function showApp() {
             document.getElementById('connect-view').style.display = 'none';
             document.getElementById('app-view').style.display = 'block';
-            log('Connected! Ready to send.');
+            log('Ready to send transactions!');
         }
 
         function disconnectApp() {
-            // Note: We can't strictly "logout" a Web3 wallet from the client side,
-            // but we can reset our UI state.
+            // Reset UI state
             document.getElementById('connect-view').style.display = 'block';
             document.getElementById('app-view').style.display = 'none';
             document.getElementById('csvInput').value = "";
             document.getElementById('log').innerHTML = "Disconnected.";
             isConnected = false;
+            userAddress = null;
         }
 
         document.getElementById('connectBtn').onclick = async () => {
@@ -243,27 +256,52 @@
                     return;
                 }
 
-                // Use Farcaster SDK to connect wallet
-                const wallet = farcasterSDK.wallet;
+                if (!provider) {
+                    alert("Wallet provider not available");
+                    return;
+                }
+
+                log("Requesting wallet connection...");
                 
-                // Request connection
-                const result = await wallet.connect({
-                    silent: false, // Show wallet UI
-                    permissions: ['approveCalls'] // Required for sending transactions
+                // Request connection using eth_requestAccounts
+                const accounts = await provider.request({ 
+                    method: 'eth_requestAccounts' 
                 });
                 
-                if (result && result.code === 200) {
+                if (accounts && accounts.length > 0) {
+                    userAddress = accounts[0];
                     isConnected = true;
                     showApp();
-                    log('Wallet connected successfully');
+                    log(`Connected: ${userAddress.substring(0, 6)}...`);
                 } else {
-                    throw new Error('Wallet connection failed');
+                    throw new Error('No accounts returned');
                 }
                 
             } catch (e) { 
                 console.error("Connection error:", e);
-                alert("Connection failed: " + (e.message || "Unknown error"));
-                log(`Connection failed: ${e.message}`);
+                const errorMsg = e.message || "Unknown error";
+                log(`Connection failed: ${errorMsg}`);
+                
+                // Try alternative connection method
+                if (e.message && e.message.includes('eth_requestAccounts')) {
+                    log("Trying alternative connection...");
+                    try {
+                        // Try sending a simple request to trigger connection
+                        const chainId = await provider.request({ method: 'eth_chainId' });
+                        log(`Chain ID: ${chainId}`);
+                        
+                        // Try again with eth_accounts
+                        const accounts = await provider.request({ method: 'eth_accounts' });
+                        if (accounts && accounts.length > 0) {
+                            userAddress = accounts[0];
+                            isConnected = true;
+                            showApp();
+                            log(`Connected via fallback: ${userAddress.substring(0, 6)}...`);
+                        }
+                    } catch (fallbackError) {
+                        alert("Please check your wallet and try again");
+                    }
+                }
             }
         };
 
@@ -304,6 +342,36 @@
             return input.startsWith('0x') ? input : '0x' + input;
         }
 
+        async function sendIndividualTransactions(calls) {
+            log(`Sending ${calls.length} individual transactions...`);
+            
+            for (let i = 0; i < calls.length; i++) {
+                const call = calls[i];
+                const amount = ethers.utils.formatEther(call.value);
+                
+                log(`Sending ${i+1}/${calls.length}: ${amount} ETH to ${call.to.substring(0, 8)}...`);
+                
+                try {
+                    const txHash = await provider.request({
+                        method: 'eth_sendTransaction',
+                        params: [{
+                            from: userAddress,
+                            to: call.to,
+                            value: call.value,
+                            data: "0x"
+                        }]
+                    });
+                    
+                    log(`✅ TX ${i+1} sent: ${txHash.substring(0,10)}...`);
+                    
+                } catch (txError) {
+                    throw new Error(`Failed on transaction ${i+1}: ${txError.message}`);
+                }
+            }
+            
+            return true;
+        }
+
         document.getElementById('sendBtn').onclick = async () => {
             const btn = document.getElementById('sendBtn');
             const rawText = document.getElementById('csvInput').value;
@@ -311,7 +379,7 @@
             const calls = [];
 
             // Validate connection
-            if (!isConnected || !fcProvider) {
+            if (!isConnected || !provider || !userAddress) {
                 alert("Please connect your wallet first");
                 return;
             }
@@ -347,7 +415,7 @@
                         throw new Error(`Invalid address: ${target} (resolved to: ${finalAddress})`);
                     }
 
-                    // 3. Prepare Batch Call
+                    // 3. Prepare transaction
                     calls.push({
                         to: finalAddress,
                         value: ethers.utils.parseEther(amount).toHexString(),
@@ -357,17 +425,18 @@
 
                 if (calls.length === 0) throw new Error("No valid lines found");
 
-                log(`Batching ${calls.length} transactions...`);
+                log(`Preparing ${calls.length} transactions...`);
                 btn.innerText = "Confirm in Wallet...";
 
-                // 4. Send Batch (EIP-5792)
+                // Try batch first, then fallback to individual
                 try {
-                    const txHash = await fcProvider.request({
+                    // Try batch send (EIP-5792)
+                    const txHash = await provider.request({
                         method: 'wallet_sendCalls',
                         params: [{
                             version: '1.0',
                             chainId: '0x2105', // Base Mainnet (8453)
-                            from: (await fcProvider.request({ method: 'eth_accounts' }))[0],
+                            from: userAddress,
                             calls: calls
                         }]
                     });
@@ -376,36 +445,18 @@
                     log(`Check wallet for confirmation`);
                     btn.innerText = "Success!";
                     
-                    // Clear input on success
-                    document.getElementById('csvInput').value = "";
+                } catch (batchError) {
+                    console.log("Batch not supported, using individual:", batchError);
                     
-                } catch (walletError) {
-                    // Fallback to individual transactions if batch not supported
-                    console.log("Batch not supported, falling back to individual transactions");
-                    log("Batch not supported, sending individually...");
-                    
-                    for (let i = 0; i < calls.length; i++) {
-                        const call = calls[i];
-                        btn.innerText = `Sending ${i+1}/${calls.length}...`;
-                        
-                        try {
-                            const tx = await fcProvider.request({
-                                method: 'eth_sendTransaction',
-                                params: [{
-                                    to: call.to,
-                                    value: call.value,
-                                    data: "0x"
-                                }]
-                            });
-                            log(`Sent ${i+1}: ${tx.substring(0,10)}...`);
-                        } catch (indivError) {
-                            throw new Error(`Failed on transaction ${i+1}: ${indivError.message}`);
-                        }
-                    }
+                    // Fallback to individual transactions
+                    await sendIndividualTransactions(calls);
                     
                     log(`<span style="color:#4ade80">✅ All ${calls.length} transactions sent!</span>`);
                     btn.innerText = "Success!";
                 }
+
+                // Clear input on success
+                document.getElementById('csvInput').value = "";
 
             } catch (err) {
                 console.error('Send error:', err);
