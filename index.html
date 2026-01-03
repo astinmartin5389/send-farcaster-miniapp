@@ -3,94 +3,100 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Base Multi-Send Pro</title>
-    <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js" type="application/javascript"></script>
+    <title>Base Multi-Sender Fix</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+    
     <style>
-        :root { --base: #0052FF; --dark: #0f172a; --card: #1e293b; }
-        body { font-family: 'Inter', sans-serif; background: var(--dark); color: white; display: flex; justify-content: center; padding: 40px; margin: 0; }
-        .container { width: 100%; max-width: 450px; background: var(--card); padding: 30px; border-radius: 16px; border: 1px solid #334155; }
-        .btn { width: 100%; background: var(--base); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-bottom: 15px; }
-        textarea { width: 100%; height: 120px; background: #0f172a; color: #38bdf8; border: 1px solid #475569; padding: 12px; border-radius: 8px; font-family: monospace; box-sizing: border-box; }
-        .log { font-size: 12px; color: #94a3b8; background: #000; padding: 10px; border-radius: 8px; height: 80px; overflow-y: auto; margin-top: 15px; }
+        :root { --blue: #0052FF; --bg: #0f172a; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: white; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .card { width: 100%; max-width: 400px; background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid #334155; }
+        .btn { width: 100%; background: var(--blue); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; margin-top: 10px; }
+        .btn:disabled { background: #475569; cursor: not-allowed; }
+        textarea { width: 100%; height: 120px; background: #0f172a; color: #38bdf8; border: 1px solid #475569; padding: 12px; border-radius: 8px; font-family: monospace; box-sizing: border-box; margin: 15px 0; resize: none; }
+        #log { font-size: 12px; color: #94a3b8; background: #000; padding: 10px; border-radius: 6px; margin-top: 10px; height: 60px; overflow-y: auto; border: 1px solid #334155; }
+        .error-banner { display: none; background: #ef4444; color: white; padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; text-align: center; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2 style="text-align:center">Base Multi-Sender</h2>
-    <button id="connectBtn" class="btn">Connect MetaMask</button>
+<div class="card">
+    <div id="libError" class="error-banner">⚠️ Ethers.js library failed to load!</div>
+    <h2 style="text-align:center; margin-top:0;">Base Multi-Send</h2>
+    
+    <button id="connectBtn" class="btn">Connect Wallet</button>
 
-    <div id="mainApp" style="display:none">
-        <label style="font-size: 12px; color: #94a3b8;">Format: address, amount (one per line)</label>
-        <textarea id="inputList" placeholder="0x123..., 0.01&#10;0x456..., 0.02"></textarea>
-        <button id="sendBtn" class="btn" style="margin-top:15px">Confirm & Send All</button>
-        <div id="statusLog" class="log">Ready to send...</div>
+    <div id="app" style="display:none">
+        <textarea id="list" placeholder="address, amount&#10;0x123..., 0.01&#10;0x456..., 0.05"></textarea>
+        <button id="sendBtn" class="btn">Send Transactions</button>
+        <div id="log">Ready...</div>
     </div>
 </div>
 
 <script>
-    let provider, signer, myAddr;
+    let provider, signer, address;
 
-    // Wait for the window to load to ensure 'ethers' library is present
-    window.onload = function() {
+    // --- SAFETY CHECK: WAIT FOR LIB ---
+    function checkLibrary() {
         if (typeof ethers === 'undefined') {
-            alert("Ethers.js library not loaded! Please check your internet connection.");
-            return;
+            document.getElementById('libError').style.display = 'block';
+            console.error("Library Error: Ethers.js not found.");
+            return false;
         }
-        console.log("Ethers.js loaded successfully.");
-    };
+        return true;
+    }
 
     async function connect() {
+        if (!checkLibrary()) return;
         if (!window.ethereum) return alert("Install MetaMask!");
-        
-        try {
-            // Request accounts
-            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-            myAddr = accounts[0];
 
-            // Set up Provider and Signer
+        try {
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            address = accounts[0];
+            
             provider = new ethers.providers.Web3Provider(window.ethereum);
             signer = provider.getSigner();
 
-            document.getElementById('connectBtn').innerText = "Connected: " + myAddr.substring(0,6) + "...";
-            document.getElementById('mainApp').style.display = 'block';
+            document.getElementById('connectBtn').innerText = "Connected";
+            document.getElementById('app').style.display = 'block';
         } catch (e) {
-            console.error(e);
+            alert("Connection failed: " + e.message);
         }
     }
 
-    async function startSending() {
-        const list = document.getElementById('inputList').value.split('\n');
-        const log = document.getElementById('statusLog');
-        
-        // Manual Nonce Management for consecutive transactions
-        let currentNonce = await provider.getTransactionCount(myAddr, "latest");
+    async function startBatch() {
+        const log = document.getElementById('log');
+        const input = document.getElementById('list').value.trim();
+        const lines = input.split('\n');
 
-        for (let entry of list) {
-            const [to, amt] = entry.split(',');
+        let currentNonce = await provider.getTransactionCount(address, "latest");
+
+        for (let line of lines) {
+            const [to, amt] = line.split(',');
             if (!to || !amt) continue;
 
             try {
-                log.innerHTML = `Confirming ${amt} to ${to.substring(0,8)}...`;
-                
+                log.innerText = `Sending to ${to.substring(0,8)}...`;
                 const tx = await signer.sendTransaction({
                     to: to.trim(),
                     value: ethers.utils.parseEther(amt.trim()),
                     nonce: currentNonce
                 });
-
-                log.innerHTML = `Sent! Hash: ${tx.hash.substring(0,10)}...`;
-                currentNonce++; // Increment nonce for the next confirm popup
+                log.innerHTML += `<br>✅ Sent: ${tx.hash.substring(0,10)}...`;
+                currentNonce++;
             } catch (err) {
-                log.innerHTML = `<span style="color:red">Error: ${err.message.substring(0,40)}</span>`;
+                log.innerHTML += `<br>❌ Failed: ${err.message.substring(0,30)}`;
                 break;
             }
         }
     }
 
-    document.getElementById('connectBtn').addEventListener('click', connect);
-    document.getElementById('sendBtn').addEventListener('click', startSending);
+    document.getElementById('connectBtn').onclick = connect;
+    document.getElementById('sendBtn').onclick = startBatch;
 </script>
+
+<script src="https://unpkg.com/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
 
 </body>
 </html>
