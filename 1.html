@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Base Farcaster Sender</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --accent: #855DCD; /* Farcaster Purple */
+            --danger: #ef4444;
+            --text: #f8fafc;
+            --border: #334155;
+        }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        /* --- TOP BAR --- */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: #15101a;
+            border-bottom: 1px solid var(--border);
+        }
+        .user-badge {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .user-badge img {
+            width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--accent);
+        }
+        .disconnect-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ccc;
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .disconnect-btn:hover { background: rgba(255, 255, 255, 0.2); }
+
+        /* --- MAIN CONTENT --- */
+        .container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
+            box-sizing: border-box;
+        }
+
+        .card {
+            width: 100%;
+            background: var(--card);
+            padding: 24px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
+
+        h2 { margin-top: 0; color: var(--accent); text-align: center; }
+
+        textarea {
+            width: 100%;
+            height: 140px;
+            background: #0f172a;
+            border: 1px solid var(--border);
+            color: #38bdf8;
+            border-radius: 12px;
+            padding: 12px;
+            box-sizing: border-box;
+            font-family: monospace;
+            resize: none;
+            font-size: 13px;
+            outline: none;
+            margin-top: 10px;
+        }
+        textarea:focus { border-color: var(--accent); }
+
+        .btn {
+            width: 100%;
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 15px;
+            font-size: 16px;
+            transition: 0.2s;
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.6; cursor: wait; }
+
+        .log-box {
+            margin-top: 15px;
+            font-size: 12px;
+            color: #94a3b8;
+            background: #00000044;
+            padding: 10px;
+            border-radius: 8px;
+            height: 80px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header" id="topBar" style="visibility: hidden;">
+        <div class="user-badge" id="userBadge">
+            <img id="pfp" src="" alt="">
+            <span id="username">@...</span>
+        </div>
+        <button id="disconnectBtn" class="disconnect-btn">Disconnect</button>
+    </div>
+
+    <div class="container">
+        <div id="app-view" class="card" style="display:none;">
+            <h2>Multi-Send</h2>
+            <p style="font-size:12px; color:#aaa; margin-bottom:5px;">
+                Enter: <code>@username, amount</code> OR <code>0xAddress, amount</code>
+            </p>
+            <textarea id="csvInput" placeholder="@dwr, 0.001&#10;0x123..., 0.005"></textarea>
+            
+            <button id="sendBtn" class="btn">Send Batch</button>
+            <div id="log" class="log-box">Ready...</div>
+        </div>
+
+        <div id="connect-view" style="text-align: center;">
+            <h2 style="margin-bottom: 20px;">Welcome</h2>
+            <button id="connectBtn" class="btn">Connect Wallet</button>
+            <p style="font-size: 12px; color: #666; margin-top: 10px;">Powered by Base & Farcaster</p>
+        </div>
+    </div>
+
+    <script type="module">
+        try {
+            const { sdk } = await import('https://esm.sh/@farcaster/miniapp-sdk');
+            window.sdk = sdk;
+            await sdk.actions.ready({ disableNativeGestures: true });
+            console.log('✅ Farcaster SDK initialized');
+            
+            // Dispatch event to start logic
+            window.dispatchEvent(new Event('sdk-ready'));
+        } catch (error) {
+            console.error('❌ Farcaster SDK failed:', error);
+            document.getElementById('connectBtn').innerText = 'SDK Failed - Refresh';
+        }
+    </script>
+
+    <script>
+        // Farcaster Provider Wrapper (from your dice game)
+        class FarcasterProviderWrapper {
+            constructor(originalProvider) {
+                this.originalProvider = originalProvider;
+                this.isMetaMask = false;
+                this.isFarcaster = true;
+                this.chainId = '0x2105'; // Base Mainnet
+                this.selectedAddress = null;
+                this._eventListeners = new Map();
+            }
+            
+            async request(args) {
+                console.log('🔄 Provider request:', args.method, args.params);
+                
+                switch (args.method) {
+                    case 'eth_chainId':
+                        return this.chainId;
+                        
+                    case 'eth_accounts':
+                    case 'eth_requestAccounts':
+                        try {
+                            if (this.originalProvider.request) {
+                                const accounts = await this.originalProvider.request({ 
+                                    method: 'eth_requestAccounts' 
+                                });
+                                if (accounts && accounts.length > 0) {
+                                    this.selectedAddress = accounts[0];
+                                    console.log('✅ Got accounts via request:', accounts);
+                                    return accounts;
+                                }
+                            }
+                            
+                            if (this.selectedAddress) {
+                                return [this.selectedAddress];
+                            }
+                            
+                            throw new Error('No accounts available');
+                        } catch (error) {
+                            console.error('❌ Failed to get accounts:', error);
+                            throw error;
+                        }
+                        
+                    case 'net_version':
+                        return '8453';
+                        
+                    case 'eth_estimateGas':
+                        return '0x186A0'; // 100,000 gas
+                        
+                    case 'eth_gasPrice':
+                        return '0x3B9ACA00'; // 1 Gwei
+                        
+                    case 'eth_sendTransaction':
+                        console.log('📤 Sending transaction via Farcaster:', args.params[0]);
+                        
+                        try {
+                            const txParams = {
+                                ...args.params[0],
+                                gas: '0x186A0', // 100,000 gas
+                                gasPrice: '0x3B9ACA00' // 1 Gwei
+                            };
+                            
+                            if (this.originalProvider.request) {
+                                const result = await this.originalProvider.request({
+                                    method: 'eth_sendTransaction',
+                                    params: [txParams]
+                                });
+                                console.log('✅ Transaction sent via request:', result);
+                                return result;
+                            }
+                            
+                            throw new Error('No transaction method available');
+                            
+                        } catch (error) {
+                            console.error('❌ Transaction failed:', error);
+                            throw error;
+                        }
+                        
+                    case 'wallet_sendCalls':
+                        // Batch transaction support
+                        console.log('📤 Sending batch calls:', args.params[0]);
+                        try {
+                            if (this.originalProvider.request) {
+                                const result = await this.originalProvider.request({
+                                    method: 'wallet_sendCalls',
+                                    params: args.params
+                                });
+                                return result;
+                            }
+                            throw new Error('Batch transactions not supported');
+                        } catch (error) {
+                            console.error('❌ Batch transaction failed:', error);
+                            throw error;
+                        }
+                        
+                    default:
+                        if (this.originalProvider.request) {
+                            try {
+                                const result = await this.originalProvider.request(args);
+                                return result;
+                            } catch (error) {
+                                console.log(`⚠️ Method ${args.method} failed:`, error.message);
+                                return this._getFallbackResponse(args.method);
+                            }
+                        }
+                        
+                        return this._getFallbackResponse(args.method);
+                }
+            }
+            
+            _getFallbackResponse(method) {
+                const fallbacks = {
+                    'eth_gasPrice': '0x3B9ACA00',
+                    'eth_blockNumber': '0x1000000',
+                    'eth_getBalance': '0x0',
+                    'eth_getTransactionCount': '0x0',
+                    'eth_estimateGas': '0x186A0',
+                    'eth_getTransactionReceipt': null,
+                };
+                
+                return fallbacks[method] || null;
+            }
+            
+            async send(method, params) {
+                return this.request({ method, params });
+            }
+            
+            on(eventName, listener) {
+                if (!this._eventListeners.has(eventName)) {
+                    this._eventListeners.set(eventName, []);
+                }
+                this._eventListeners.get(eventName).push(listener);
+                
+                if (this.originalProvider.on) {
+                    this.originalProvider.on(eventName, listener);
+                }
+                
+                return this;
+            }
+            
+            removeListener(eventName, listener) {
+                const listeners = this._eventListeners.get(eventName);
+                if (listeners) {
+                    const index = listeners.indexOf(listener);
+                    if (index > -1) {
+                        listeners.splice(index, 1);
+                    }
+                }
+                
+                if (this.originalProvider.removeListener) {
+                    this.originalProvider.removeListener(eventName, listener);
+                }
+                
+                return this;
+            }
+        }
+
+        let provider;
+        let farcasterSDK;
+        let isConnected = false;
+        let userAddress = null;
+        let signer = null;
+
+        // Helper for Logs
+        const log = (msg) => {
+            const el = document.getElementById('log');
+            el.innerHTML = `> ${msg}<br>${el.innerHTML}`;
+        };
+
+        window.addEventListener('sdk-ready', async () => {
+            // Get the SDK instance
+            farcasterSDK = window.sdk;
+            
+            // 1. Load User Context (Top Bar)
+            try {
+                const context = await farcasterSDK.context;
+                if (context && context.user) {
+                    document.getElementById('topBar').style.visibility = 'visible';
+                    document.getElementById('username').innerText = `@${context.user.username}`;
+                    document.getElementById('pfp').src = context.user.pfpUrl;
+                    log(`Logged in as @${context.user.username}`);
+                }
+            } catch(e) { 
+                console.error('Failed to load user context:', e);
+                log('Failed to load user context');
+            }
+        });
+
+        // --- ACTIONS ---
+
+        function showApp() {
+            document.getElementById('connect-view').style.display = 'none';
+            document.getElementById('app-view').style.display = 'block';
+            log('Ready to send transactions!');
+        }
+
+        function disconnectApp() {
+            // Reset UI state
+            document.getElementById('connect-view').style.display = 'block';
+            document.getElementById('app-view').style.display = 'none';
+            document.getElementById('csvInput').value = "";
+            document.getElementById('log').innerHTML = "Disconnected.";
+            isConnected = false;
+            userAddress = null;
+            signer = null;
+            provider = null;
+        }
+
+        document.getElementById('connectBtn').onclick = async () => {
+            try {
+                if (!farcasterSDK) {
+                    alert("Farcaster SDK not loaded. Please refresh.");
+                    return;
+                }
+
+                log("Requesting wallet connection...");
+                
+                // Get raw provider from Farcaster SDK
+                const rawProvider = await farcasterSDK.wallet.getEthereumProvider();
+                
+                if (!rawProvider) {
+                    alert("No wallet provider available from Farcaster");
+                    return;
+                }
+                
+                console.log('✅ Raw Farcaster provider obtained');
+                
+                // Wrap it with FarcasterProviderWrapper
+                const wrappedProvider = new FarcasterProviderWrapper(rawProvider);
+                
+                // Create ethers.js provider
+                provider = new ethers.providers.Web3Provider(wrappedProvider, {
+                    name: 'base',
+                    chainId: 8453 // Base Mainnet
+                });
+                
+                // Get signer
+                signer = provider.getSigner();
+                userAddress = await signer.getAddress();
+                
+                isConnected = true;
+                showApp();
+                log(`Connected: ${userAddress.substring(0, 6)}...`);
+                
+            } catch (e) { 
+                console.error("Connection error:", e);
+                const errorMsg = e.message || "Unknown error";
+                log(`Connection failed: ${errorMsg}`);
+                
+                // Fallback to MetaMask
+                if (typeof window.ethereum !== 'undefined') {
+                    try {
+                        log("Trying MetaMask fallback...");
+                        await window.ethereum.request({ method: 'eth_requestAccounts' });
+                        provider = new ethers.providers.Web3Provider(window.ethereum);
+                        signer = provider.getSigner();
+                        userAddress = await signer.getAddress();
+                        
+                        isConnected = true;
+                        showApp();
+                        log(`Connected via MetaMask: ${userAddress.substring(0, 6)}...`);
+                    } catch (mmError) {
+                        alert("Both Farcaster and MetaMask failed. Please try again.");
+                    }
+                } else {
+                    alert("Please use Farcaster app or install MetaMask");
+                }
+            }
+        };
+
+        document.getElementById('disconnectBtn').onclick = disconnectApp;
+
+        // --- RESOLUTION & SENDING LOGIC ---
+
+        async function resolveFarcasterName(input) {
+            // If it's already an address, return it
+            if (input.startsWith('0x')) return input;
+
+            // If it starts with @, try to resolve
+            if (input.startsWith('@')) {
+                const username = input.substring(1).trim(); // remove @
+                log(`Resolving @${username}...`);
+                
+                try {
+                    // Using Warpcast API to find address (more reliable)
+                    const res = await fetch(`https://client.warpcast.com/v2/user-by-username?username=${username}`);
+                    const data = await res.json();
+                    
+                    if (data && data.result && data.result.user) {
+                        // Get the custody address (primary address)
+                        const addr = data.result.user.custodyAddress;
+                        if (!addr) {
+                            throw new Error(`No address found for @${username}`);
+                        }
+                        log(`Found @${username}: ${addr.substring(0,6)}...`);
+                        return addr;
+                    } else {
+                        // Fallback to Farcaster API
+                        const fallbackRes = await fetch(`https://api.farcaster.xyz/v2/user-by-username?username=${username}`);
+                        const fallbackData = await fallbackRes.json();
+                        
+                        if (fallbackData && fallbackData.result && fallbackData.result.user) {
+                            const addr = fallbackData.result.user.custodyAddress;
+                            if (!addr) {
+                                throw new Error(`No address found for @${username}`);
+                            }
+                            log(`Found @${username} via Farcaster API: ${addr.substring(0,6)}...`);
+                            return addr;
+                        } else {
+                            throw new Error(`User @${username} not found`);
+                        }
+                    }
+                } catch (err) {
+                    console.error('Resolution error:', err);
+                    throw new Error(`Could not resolve @${username}: ${err.message}`);
+                }
+            }
+            // If it's not an address and doesn't start with @, try to add 0x prefix
+            return input.startsWith('0x') ? input : '0x' + input;
+        }
+
+        async function sendIndividualTransactions(calls) {
+            log(`Sending ${calls.length} individual transactions...`);
+            
+            for (let i = 0; i < calls.length; i++) {
+                const call = calls[i];
+                const amount = ethers.utils.formatEther(call.value);
+                
+                log(`Sending ${i+1}/${calls.length}: ${amount} ETH to ${call.to.substring(0, 8)}...`);
+                
+                try {
+                    // Use signer for transactions
+                    const tx = await signer.sendTransaction({
+                        to: call.to,
+                        value: call.value,
+                        data: "0x"
+                    });
+                    
+                    log(`✅ TX ${i+1} sent: ${tx.hash.substring(0,10)}...`);
+                    log(`Waiting for confirmation...`);
+                    
+                    // Wait for confirmation
+                    try {
+                        const receipt = await tx.wait();
+                        log(`✅ TX ${i+1} confirmed!`);
+                    } catch (waitError) {
+                        log(`⚠️ TX ${i+1} sent but confirmation pending`);
+                    }
+                    
+                } catch (txError) {
+                    throw new Error(`Failed on transaction ${i+1}: ${txError.message}`);
+                }
+            }
+            
+            return true;
+        }
+
+        document.getElementById('sendBtn').onclick = async () => {
+            const btn = document.getElementById('sendBtn');
+            const rawText = document.getElementById('csvInput').value;
+            const lines = rawText.split('\n');
+            const calls = [];
+
+            // Validate connection
+            if (!isConnected || !signer || !userAddress) {
+                alert("Please connect your wallet first");
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerText = "Resolving names...";
+
+            try {
+                // Process each line
+                for (let line of lines) {
+                    line = line.trim();
+                    if (!line) continue;
+                    
+                    const parts = line.split(',');
+                    if (parts.length !== 2) {
+                        throw new Error(`Invalid format: "${line}". Use: "@username, 0.001" or "0x..., 0.001"`);
+                    }
+
+                    let [target, amount] = parts;
+                    target = target.trim();
+                    amount = amount.trim();
+
+                    // Validate amount
+                    if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+                        throw new Error(`Invalid amount: "${amount}" for ${target}`);
+                    }
+
+                    // 1. Resolve Name if needed
+                    const finalAddress = await resolveFarcasterName(target);
+
+                    // 2. Validate Address
+                    if (!ethers.utils.isAddress(finalAddress)) {
+                        throw new Error(`Invalid address: ${target} (resolved to: ${finalAddress})`);
+                    }
+
+                    // 3. Prepare transaction
+                    calls.push({
+                        to: finalAddress,
+                        value: ethers.utils.parseEther(amount).toHexString(),
+                        data: "0x"
+                    });
+                }
+
+                if (calls.length === 0) throw new Error("No valid lines found");
+
+                log(`Preparing ${calls.length} transactions...`);
+                btn.innerText = "Confirm in Wallet...";
+
+                // Try batch first, then fallback to individual
+                try {
+                    // Try batch send (EIP-5792) using the wrapped provider
+                    const txHash = await provider.provider.request({
+                        method: 'wallet_sendCalls',
+                        params: [{
+                            version: '1.0',
+                            chainId: '0x2105', // Base Mainnet (8453)
+                            from: userAddress,
+                            calls: calls
+                        }]
+                    });
+
+                    log(`<span style="color:#4ade80">✅ Batch Sent! Hash: ${txHash.substring(0,10)}...</span>`);
+                    log(`Check wallet for confirmation`);
+                    btn.innerText = "Success!";
+                    
+                } catch (batchError) {
+                    console.log("Batch not supported, using individual:", batchError);
+                    
+                    // Fallback to individual transactions using signer
+                    await sendIndividualTransactions(calls);
+                    
+                    log(`<span style="color:#4ade80">✅ All ${calls.length} transactions sent!</span>`);
+                    btn.innerText = "Success!";
+                }
+
+                // Clear input on success
+                document.getElementById('csvInput').value = "";
+
+            } catch (err) {
+                console.error('Send error:', err);
+                log(`<span style="color:#ef4444">❌ Error: ${err.message}</span>`);
+                btn.innerText = "Retry";
+                alert(`Error: ${err.message}`);
+            }
+            
+            setTimeout(() => { 
+                btn.disabled = false; 
+                if(btn.innerText.includes("Success")) btn.innerText = "Send Batch"; 
+            }, 3000);
+        };
+    </script>
+</body>
+</html>
