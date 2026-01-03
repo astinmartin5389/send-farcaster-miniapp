@@ -172,10 +172,167 @@
     </script>
 
     <script>
+        // Farcaster Provider Wrapper (from your dice game)
+        class FarcasterProviderWrapper {
+            constructor(originalProvider) {
+                this.originalProvider = originalProvider;
+                this.isMetaMask = false;
+                this.isFarcaster = true;
+                this.chainId = '0x2105'; // Base Mainnet
+                this.selectedAddress = null;
+                this._eventListeners = new Map();
+            }
+            
+            async request(args) {
+                console.log('🔄 Provider request:', args.method, args.params);
+                
+                switch (args.method) {
+                    case 'eth_chainId':
+                        return this.chainId;
+                        
+                    case 'eth_accounts':
+                    case 'eth_requestAccounts':
+                        try {
+                            if (this.originalProvider.request) {
+                                const accounts = await this.originalProvider.request({ 
+                                    method: 'eth_requestAccounts' 
+                                });
+                                if (accounts && accounts.length > 0) {
+                                    this.selectedAddress = accounts[0];
+                                    console.log('✅ Got accounts via request:', accounts);
+                                    return accounts;
+                                }
+                            }
+                            
+                            if (this.selectedAddress) {
+                                return [this.selectedAddress];
+                            }
+                            
+                            throw new Error('No accounts available');
+                        } catch (error) {
+                            console.error('❌ Failed to get accounts:', error);
+                            throw error;
+                        }
+                        
+                    case 'net_version':
+                        return '8453';
+                        
+                    case 'eth_estimateGas':
+                        return '0x186A0'; // 100,000 gas
+                        
+                    case 'eth_gasPrice':
+                        return '0x3B9ACA00'; // 1 Gwei
+                        
+                    case 'eth_sendTransaction':
+                        console.log('📤 Sending transaction via Farcaster:', args.params[0]);
+                        
+                        try {
+                            const txParams = {
+                                ...args.params[0],
+                                gas: '0x186A0', // 100,000 gas
+                                gasPrice: '0x3B9ACA00' // 1 Gwei
+                            };
+                            
+                            if (this.originalProvider.request) {
+                                const result = await this.originalProvider.request({
+                                    method: 'eth_sendTransaction',
+                                    params: [txParams]
+                                });
+                                console.log('✅ Transaction sent via request:', result);
+                                return result;
+                            }
+                            
+                            throw new Error('No transaction method available');
+                            
+                        } catch (error) {
+                            console.error('❌ Transaction failed:', error);
+                            throw error;
+                        }
+                        
+                    case 'wallet_sendCalls':
+                        // Batch transaction support
+                        console.log('📤 Sending batch calls:', args.params[0]);
+                        try {
+                            if (this.originalProvider.request) {
+                                const result = await this.originalProvider.request({
+                                    method: 'wallet_sendCalls',
+                                    params: args.params
+                                });
+                                return result;
+                            }
+                            throw new Error('Batch transactions not supported');
+                        } catch (error) {
+                            console.error('❌ Batch transaction failed:', error);
+                            throw error;
+                        }
+                        
+                    default:
+                        if (this.originalProvider.request) {
+                            try {
+                                const result = await this.originalProvider.request(args);
+                                return result;
+                            } catch (error) {
+                                console.log(`⚠️ Method ${args.method} failed:`, error.message);
+                                return this._getFallbackResponse(args.method);
+                            }
+                        }
+                        
+                        return this._getFallbackResponse(args.method);
+                }
+            }
+            
+            _getFallbackResponse(method) {
+                const fallbacks = {
+                    'eth_gasPrice': '0x3B9ACA00',
+                    'eth_blockNumber': '0x1000000',
+                    'eth_getBalance': '0x0',
+                    'eth_getTransactionCount': '0x0',
+                    'eth_estimateGas': '0x186A0',
+                    'eth_getTransactionReceipt': null,
+                };
+                
+                return fallbacks[method] || null;
+            }
+            
+            async send(method, params) {
+                return this.request({ method, params });
+            }
+            
+            on(eventName, listener) {
+                if (!this._eventListeners.has(eventName)) {
+                    this._eventListeners.set(eventName, []);
+                }
+                this._eventListeners.get(eventName).push(listener);
+                
+                if (this.originalProvider.on) {
+                    this.originalProvider.on(eventName, listener);
+                }
+                
+                return this;
+            }
+            
+            removeListener(eventName, listener) {
+                const listeners = this._eventListeners.get(eventName);
+                if (listeners) {
+                    const index = listeners.indexOf(listener);
+                    if (index > -1) {
+                        listeners.splice(index, 1);
+                    }
+                }
+                
+                if (this.originalProvider.removeListener) {
+                    this.originalProvider.removeListener(eventName, listener);
+                }
+                
+                return this;
+            }
+        }
+
         let provider;
         let farcasterSDK;
         let isConnected = false;
         let userAddress = null;
+        let signer = null;
 
         // Helper for Logs
         const log = (msg) => {
@@ -200,35 +357,6 @@
                 console.error('Failed to load user context:', e);
                 log('Failed to load user context');
             }
-
-            // 2. Get the provider from SDK
-            try {
-                // Get the wallet provider from SDK
-                provider = farcasterSDK.wallet.getEthereumProvider();
-                
-                if (!provider) {
-                    log('No wallet provider available');
-                    return;
-                }
-                
-                // Check if already connected
-                try {
-                    const accounts = await provider.request({ method: 'eth_accounts' });
-                    if (accounts && accounts.length > 0) {
-                        userAddress = accounts[0];
-                        isConnected = true;
-                        showApp();
-                        log(`Connected to wallet: ${userAddress.substring(0, 6)}...`);
-                    } else {
-                        log('Wallet not connected');
-                    }
-                } catch (e) {
-                    log('Wallet connection check failed');
-                }
-            } catch (e) { 
-                console.log("Provider error:", e.message);
-                log('Wallet provider error');
-            }
         });
 
         // --- ACTIONS ---
@@ -247,6 +375,8 @@
             document.getElementById('log').innerHTML = "Disconnected.";
             isConnected = false;
             userAddress = null;
+            signer = null;
+            provider = null;
         }
 
         document.getElementById('connectBtn').onclick = async () => {
@@ -256,51 +386,57 @@
                     return;
                 }
 
-                if (!provider) {
-                    alert("Wallet provider not available");
-                    return;
-                }
-
                 log("Requesting wallet connection...");
                 
-                // Request connection using eth_requestAccounts
-                const accounts = await provider.request({ 
-                    method: 'eth_requestAccounts' 
+                // Get raw provider from Farcaster SDK
+                const rawProvider = await farcasterSDK.wallet.getEthereumProvider();
+                
+                if (!rawProvider) {
+                    alert("No wallet provider available from Farcaster");
+                    return;
+                }
+                
+                console.log('✅ Raw Farcaster provider obtained');
+                
+                // Wrap it with FarcasterProviderWrapper
+                const wrappedProvider = new FarcasterProviderWrapper(rawProvider);
+                
+                // Create ethers.js provider
+                provider = new ethers.providers.Web3Provider(wrappedProvider, {
+                    name: 'base',
+                    chainId: 8453 // Base Mainnet
                 });
                 
-                if (accounts && accounts.length > 0) {
-                    userAddress = accounts[0];
-                    isConnected = true;
-                    showApp();
-                    log(`Connected: ${userAddress.substring(0, 6)}...`);
-                } else {
-                    throw new Error('No accounts returned');
-                }
+                // Get signer
+                signer = provider.getSigner();
+                userAddress = await signer.getAddress();
+                
+                isConnected = true;
+                showApp();
+                log(`Connected: ${userAddress.substring(0, 6)}...`);
                 
             } catch (e) { 
                 console.error("Connection error:", e);
                 const errorMsg = e.message || "Unknown error";
                 log(`Connection failed: ${errorMsg}`);
                 
-                // Try alternative connection method
-                if (e.message && e.message.includes('eth_requestAccounts')) {
-                    log("Trying alternative connection...");
+                // Fallback to MetaMask
+                if (typeof window.ethereum !== 'undefined') {
                     try {
-                        // Try sending a simple request to trigger connection
-                        const chainId = await provider.request({ method: 'eth_chainId' });
-                        log(`Chain ID: ${chainId}`);
+                        log("Trying MetaMask fallback...");
+                        await window.ethereum.request({ method: 'eth_requestAccounts' });
+                        provider = new ethers.providers.Web3Provider(window.ethereum);
+                        signer = provider.getSigner();
+                        userAddress = await signer.getAddress();
                         
-                        // Try again with eth_accounts
-                        const accounts = await provider.request({ method: 'eth_accounts' });
-                        if (accounts && accounts.length > 0) {
-                            userAddress = accounts[0];
-                            isConnected = true;
-                            showApp();
-                            log(`Connected via fallback: ${userAddress.substring(0, 6)}...`);
-                        }
-                    } catch (fallbackError) {
-                        alert("Please check your wallet and try again");
+                        isConnected = true;
+                        showApp();
+                        log(`Connected via MetaMask: ${userAddress.substring(0, 6)}...`);
+                    } catch (mmError) {
+                        alert("Both Farcaster and MetaMask failed. Please try again.");
                     }
+                } else {
+                    alert("Please use Farcaster app or install MetaMask");
                 }
             }
         };
@@ -352,17 +488,14 @@
                 log(`Sending ${i+1}/${calls.length}: ${amount} ETH to ${call.to.substring(0, 8)}...`);
                 
                 try {
-                    const txHash = await provider.request({
-                        method: 'eth_sendTransaction',
-                        params: [{
-                            from: userAddress,
-                            to: call.to,
-                            value: call.value,
-                            data: "0x"
-                        }]
+                    // Use signer for transactions
+                    const tx = await signer.sendTransaction({
+                        to: call.to,
+                        value: call.value,
+                        data: "0x"
                     });
                     
-                    log(`✅ TX ${i+1} sent: ${txHash.substring(0,10)}...`);
+                    log(`✅ TX ${i+1} sent: ${tx.hash.substring(0,10)}...`);
                     
                 } catch (txError) {
                     throw new Error(`Failed on transaction ${i+1}: ${txError.message}`);
@@ -379,7 +512,7 @@
             const calls = [];
 
             // Validate connection
-            if (!isConnected || !provider || !userAddress) {
+            if (!isConnected || !signer || !userAddress) {
                 alert("Please connect your wallet first");
                 return;
             }
@@ -430,8 +563,8 @@
 
                 // Try batch first, then fallback to individual
                 try {
-                    // Try batch send (EIP-5792)
-                    const txHash = await provider.request({
+                    // Try batch send (EIP-5792) using the wrapped provider
+                    const txHash = await provider.provider.request({
                         method: 'wallet_sendCalls',
                         params: [{
                             version: '1.0',
@@ -448,7 +581,7 @@
                 } catch (batchError) {
                     console.log("Batch not supported, using individual:", batchError);
                     
-                    // Fallback to individual transactions
+                    // Fallback to individual transactions using signer
                     await sendIndividualTransactions(calls);
                     
                     log(`<span style="color:#4ade80">✅ All ${calls.length} transactions sent!</span>`);
