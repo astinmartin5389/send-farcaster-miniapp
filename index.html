@@ -3,21 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Base Multi-Sender Frame</title>
+    <title>Base Batch Sender</title>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
 
     <style>
         :root {
-            --bg: #17101F; /* Farcaster Dark */
-            --card: #2C243B;
-            --accent: #855DCD; /* Purple */
-            --text: #ffffff;
-            --success: #4ade80;
-            --error: #ef4444;
+            --bg: #0f172a;
+            --card: #1e293b;
+            --accent: #7c65c1; /* Farcaster Purple */
+            --text: #f8fafc;
+            --border: #334155;
         }
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-family: 'Inter', system-ui, sans-serif;
             background: var(--bg);
             color: var(--text);
             display: flex;
@@ -32,95 +31,84 @@
             width: 100%;
             max-width: 400px;
             background: var(--card);
-            border-radius: 16px;
             padding: 24px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-            border: 1px solid #38304b;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
-        h2 { margin-top: 0; text-align: center; color: var(--accent); }
+        h2 { text-align: center; color: var(--accent); margin-top: 0; }
         
-        .user-badge {
-            background: rgba(0,0,0,0.3);
-            padding: 8px 12px;
+        .profile-badge {
+            display: none; /* Hidden by default */
+            background: #00000044;
+            padding: 10px;
             border-radius: 8px;
-            font-size: 13px;
-            color: #ccc;
-            margin-bottom: 15px;
-            display: none; /* Hidden until loaded */
             align-items: center;
-            justify-content: center;
-            gap: 8px;
+            gap: 10px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border);
         }
-
+        .profile-badge img { width: 32px; height: 32px; border-radius: 50%; }
+        
         textarea {
             width: 100%;
             height: 120px;
-            background: #0f0a16;
-            border: 1px solid #4a415e;
-            color: #d1d5db;
-            border-radius: 12px;
+            background: #0f172a;
+            border: 1px solid var(--border);
+            color: #38bdf8;
+            border-radius: 8px;
             padding: 12px;
             box-sizing: border-box;
             font-family: monospace;
             resize: none;
-            outline: none;
             font-size: 13px;
         }
-        textarea:focus { border-color: var(--accent); }
-
+        
         .btn {
             width: 100%;
             background: var(--accent);
             color: white;
             border: none;
             padding: 14px;
-            border-radius: 12px;
+            border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
             margin-top: 15px;
             font-size: 16px;
-            transition: transform 0.1s;
         }
-        .btn:active { transform: scale(0.98); }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn:disabled { background: #475569; cursor: not-allowed; }
 
-        .log-box {
+        .log {
             margin-top: 15px;
-            background: #000000;
-            border-radius: 8px;
-            padding: 10px;
-            height: 100px;
-            overflow-y: auto;
-            font-size: 11px;
-            color: #888;
-            border: 1px solid #333;
+            font-size: 12px;
+            color: #94a3b8;
+            text-align: center;
+            min-height: 20px;
         }
-        .log-item { margin-bottom: 4px; border-bottom: 1px solid #222; padding-bottom: 2px; }
-        .success { color: var(--success); }
-        .error { color: var(--error); }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Base Multi-Send</h2>
-    
-    <div id="fc-identity" class="user-badge">
-        <span>Loading ID...</span>
-    </div>
+    <h2>Base Batch Sender</h2>
 
-    <button id="connectBtn" class="btn">Connect Wallet</button>
-
-    <div id="app-ui" style="display:none;">
-        <p style="font-size:12px; color:#aaa; margin-bottom:5px;">Enter: <code>address, amount</code> (one per line)</p>
-        <textarea id="recipientList" placeholder="0x123..., 0.001&#10;0x456..., 0.005"></textarea>
-        
-        <button id="sendBtn" class="btn">Send Transactions</button>
-        
-        <div id="console" class="log-box">
-            <div class="log-item">Ready to start...</div>
+    <div id="userProfile" class="profile-badge">
+        <img id="pfp" src="" alt="pfp">
+        <div>
+            <div id="username" style="font-weight:bold">@loading...</div>
+            <div id="fid" style="font-size:11px; color:#94a3b8">FID: ...</div>
         </div>
     </div>
+
+    <div id="app-content" style="display:none;">
+        <p style="font-size:12px; color:#94a3b8; margin-bottom:8px">Recipients (Address, Amount ETH)</p>
+        <textarea id="csvInput" placeholder="0x123..., 0.001&#10;0x456..., 0.005"></textarea>
+        
+        <button id="sendBtn" class="btn">Send Batch (1-Click)</button>
+        <div id="status" class="log">Enter addresses to start</div>
+    </div>
+
+    <button id="connectBtn" class="btn" style="display:none;">Connect Wallet</button>
 </div>
 
 <script type="module">
@@ -130,117 +118,123 @@
         await sdk.actions.ready({ disableNativeGestures: true });
         console.log('✅ Farcaster SDK initialized');
         
-        // Load Context (Username/FID)
-        const context = await sdk.context;
-        if(context && context.user) {
-            const badge = document.getElementById('fc-identity');
-            badge.style.display = 'flex';
-            badge.innerHTML = `👤 @${context.user.username} (FID: ${context.user.fid})`;
-        }
-
+        // Trigger UI Init after SDK is ready
+        window.dispatchEvent(new Event('sdk-ready'));
     } catch (error) {
         console.error('❌ Farcaster SDK failed:', error);
     }
 </script>
 
 <script>
-    let provider, signer, userAddress;
+    let fcProvider;
 
-    // Helper: Add log to UI
-    function log(msg, type = '') {
-        const consoleDiv = document.getElementById('console');
-        const item = document.createElement('div');
-        item.className = `log-item ${type}`;
-        item.innerHTML = msg;
-        consoleDiv.prepend(item);
-    }
-
-    async function connectWallet() {
-        if (typeof window.ethereum === 'undefined') {
-            return alert("No wallet found. Open in Warpcast or MetaMask.");
-        }
-
-        try {
-            // Farcaster injects window.ethereum
-            provider = new ethers.providers.Web3Provider(window.ethereum);
-            
-            // Request Access
-            await provider.send("eth_requestAccounts", []);
-            signer = provider.getSigner();
-            userAddress = await signer.getAddress();
-
-            // Switch UI
-            document.getElementById('connectBtn').style.display = 'none';
-            document.getElementById('app-ui').style.display = 'block';
-            log(`Linked: ${userAddress.substring(0,6)}...`, 'success');
-
-        } catch (err) {
-            log(`Connect Error: ${err.message}`, 'error');
-        }
-    }
-
-    async function processMultiSend() {
-        const rawText = document.getElementById('recipientList').value;
-        const lines = rawText.split('\n');
+    // Wait for SDK to load
+    window.addEventListener('sdk-ready', async () => {
+        const status = document.getElementById('status');
         
-        // 1. Validate Input
-        const txList = [];
+        // 1. Load User Context
+        try {
+            const context = await window.sdk.context;
+            if (context && context.user) {
+                document.getElementById('userProfile').style.display = 'flex';
+                document.getElementById('username').innerText = `@${context.user.username}`;
+                document.getElementById('fid').innerText = `FID: ${context.user.fid}`;
+                document.getElementById('pfp').src = context.user.pfpUrl;
+            }
+        } catch (e) {
+            console.error("Context error:", e);
+        }
+
+        // 2. Initialize Wallet Provider from SDK (Fixes your connection issue)
+        // We do NOT use window.ethereum. We use the SDK provider.
+        fcProvider = window.sdk.wallet.getEthereumProvider();
+
+        // Check if already connected
+        try {
+            const accounts = await fcProvider.request({ method: 'eth_accounts' });
+            if (accounts.length > 0) {
+                enableApp();
+            } else {
+                document.getElementById('connectBtn').style.display = 'block';
+            }
+        } catch (e) {
+            status.innerText = "Error loading wallet info";
+        }
+    });
+
+    // Connect Button Logic
+    document.getElementById('connectBtn').onclick = async () => {
+        try {
+            await fcProvider.request({ method: 'eth_requestAccounts' });
+            enableApp();
+        } catch (e) {
+            document.getElementById('status').innerText = "Connection failed";
+        }
+    };
+
+    function enableApp() {
+        document.getElementById('connectBtn').style.display = 'none';
+        document.getElementById('app-content').style.display = 'block';
+        document.getElementById('status').innerText = "Wallet Connected ✅";
+    }
+
+    // --- BATCH SEND LOGIC (EIP-5792) ---
+    document.getElementById('sendBtn').onclick = async () => {
+        const btn = document.getElementById('sendBtn');
+        const status = document.getElementById('status');
+        const input = document.getElementById('csvInput').value;
+
+        // Parse Input
+        const lines = input.split('\n');
+        const calls = [];
+
         for (let line of lines) {
             const [addr, amt] = line.split(',');
             if (addr && amt) {
                 try {
-                    ethers.utils.getAddress(addr.trim()); // check address validity
-                    txList.push({ to: addr.trim(), val: amt.trim() });
-                } catch (e) {
-                    log(`Invalid address in line: ${line}`, 'error');
-                }
-            }
-        }
-
-        if (txList.length === 0) return alert("No valid recipients found.");
-
-        document.getElementById('sendBtn').disabled = true;
-        document.getElementById('sendBtn').innerText = "Processing...";
-
-        // 2. Get Nonce for Sequencing
-        try {
-            let currentNonce = await provider.getTransactionCount(userAddress, "latest");
-
-            for (let txItem of txList) {
-                try {
-                    log(`Sending ${txItem.val} ETH to ${txItem.to.substring(0,6)}...`);
-                    
-                    const tx = await signer.sendTransaction({
-                        to: txItem.to,
-                        value: ethers.utils.parseEther(txItem.val),
-                        nonce: currentNonce
+                    calls.push({
+                        to: addr.trim(),
+                        value: ethers.utils.parseEther(amt.trim()).toHexString(), // Must be Hex
+                        data: "0x" // Empty data for ETH transfer
                     });
-
-                    log(`✅ Sent! <a href="https://basescan.org/tx/${tx.hash}" target="_blank" style="color:#4ade80">View</a>`, 'success');
-                    currentNonce++; // Important: increment for next loop
-
-                } catch (innerErr) {
-                    log(`❌ Failed: ${innerErr.reason || innerErr.message}`, 'error');
-                    // Break loop on error to prevent nonce chaos? 
-                    // Usually safer to break here.
-                    break;
+                } catch (e) {
+                    return alert("Invalid amount or address in line: " + line);
                 }
             }
-        } catch (err) {
-            log(`System Error: ${err.message}`, 'error');
         }
 
-        document.getElementById('sendBtn').disabled = false;
-        document.getElementById('sendBtn').innerText = "Send Transactions";
-    }
+        if (calls.length === 0) return alert("No recipients found!");
 
-    // Bind Buttons
-    document.getElementById('connectBtn').addEventListener('click', connectWallet);
-    document.getElementById('sendBtn').addEventListener('click', processMultiSend);
+        // Execute Batch Transaction
+        try {
+            btn.disabled = true;
+            btn.innerText = "Requesting Signature...";
+            
+            // This is the new Farcaster feature (Batch Transactions)
+            const txHash = await fcProvider.request({
+                method: 'wallet_sendCalls',
+                params: [{
+                    version: '1.0',
+                    chainId: '0x2105', // Base Mainnet (8453) in Hex
+                    calls: calls
+                }]
+            });
+
+            status.innerHTML = `<span style="color:#4ade80">Success! Batch ID sent.</span>`;
+            btn.innerText = "Sent!";
+            
+            // Reset after 3s
+            setTimeout(() => { btn.disabled = false; btn.innerText = "Send Batch (1-Click)"; }, 3000);
+
+        } catch (error) {
+            console.error(error);
+            status.innerText = "Error: " + (error.message || "User rejected");
+            btn.disabled = false;
+            btn.innerText = "Send Batch (1-Click)";
+        }
+    };
 </script>
 
-</body>
-</html>
 </body>
 </html>
 
