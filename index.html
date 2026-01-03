@@ -3,110 +3,244 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Base Multi-Sender Fix</title>
+    <title>Base Multi-Sender Frame</title>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
-    
+
     <style>
-        :root { --blue: #0052FF; --bg: #0f172a; }
-        body { font-family: 'Inter', sans-serif; background: var(--bg); color: white; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .card { width: 100%; max-width: 400px; background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid #334155; }
-        .btn { width: 100%; background: var(--blue); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; margin-top: 10px; }
-        .btn:disabled { background: #475569; cursor: not-allowed; }
-        textarea { width: 100%; height: 120px; background: #0f172a; color: #38bdf8; border: 1px solid #475569; padding: 12px; border-radius: 8px; font-family: monospace; box-sizing: border-box; margin: 15px 0; resize: none; }
-        #log { font-size: 12px; color: #94a3b8; background: #000; padding: 10px; border-radius: 6px; margin-top: 10px; height: 60px; overflow-y: auto; border: 1px solid #334155; }
-        .error-banner { display: none; background: #ef4444; color: white; padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; text-align: center; }
+        :root {
+            --bg: #17101F; /* Farcaster Dark */
+            --card: #2C243B;
+            --accent: #855DCD; /* Purple */
+            --text: #ffffff;
+            --success: #4ade80;
+            --error: #ef4444;
+        }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            width: 100%;
+            max-width: 400px;
+            background: var(--card);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            border: 1px solid #38304b;
+        }
+        h2 { margin-top: 0; text-align: center; color: var(--accent); }
+        
+        .user-badge {
+            background: rgba(0,0,0,0.3);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #ccc;
+            margin-bottom: 15px;
+            display: none; /* Hidden until loaded */
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 120px;
+            background: #0f0a16;
+            border: 1px solid #4a415e;
+            color: #d1d5db;
+            border-radius: 12px;
+            padding: 12px;
+            box-sizing: border-box;
+            font-family: monospace;
+            resize: none;
+            outline: none;
+            font-size: 13px;
+        }
+        textarea:focus { border-color: var(--accent); }
+
+        .btn {
+            width: 100%;
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 15px;
+            font-size: 16px;
+            transition: transform 0.1s;
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .log-box {
+            margin-top: 15px;
+            background: #000000;
+            border-radius: 8px;
+            padding: 10px;
+            height: 100px;
+            overflow-y: auto;
+            font-size: 11px;
+            color: #888;
+            border: 1px solid #333;
+        }
+        .log-item { margin-bottom: 4px; border-bottom: 1px solid #222; padding-bottom: 2px; }
+        .success { color: var(--success); }
+        .error { color: var(--error); }
     </style>
 </head>
 <body>
 
-<div class="card">
-    <div id="libError" class="error-banner">⚠️ Ethers.js library failed to load!</div>
-    <h2 style="text-align:center; margin-top:0;">Base Multi-Send</h2>
+<div class="container">
+    <h2>Base Multi-Send</h2>
     
+    <div id="fc-identity" class="user-badge">
+        <span>Loading ID...</span>
+    </div>
+
     <button id="connectBtn" class="btn">Connect Wallet</button>
 
-    <div id="app" style="display:none">
-        <textarea id="list" placeholder="address, amount&#10;0x123..., 0.01&#10;0x456..., 0.05"></textarea>
+    <div id="app-ui" style="display:none;">
+        <p style="font-size:12px; color:#aaa; margin-bottom:5px;">Enter: <code>address, amount</code> (one per line)</p>
+        <textarea id="recipientList" placeholder="0x123..., 0.001&#10;0x456..., 0.005"></textarea>
+        
         <button id="sendBtn" class="btn">Send Transactions</button>
-        <div id="log">Ready...</div>
+        
+        <div id="console" class="log-box">
+            <div class="log-item">Ready to start...</div>
+        </div>
     </div>
 </div>
 
-<script>
-    let provider, signer, address;
-
-    // --- SAFETY CHECK: WAIT FOR LIB ---
-    function checkLibrary() {
-        if (typeof ethers === 'undefined') {
-            document.getElementById('libError').style.display = 'block';
-            console.error("Library Error: Ethers.js not found.");
-            return false;
+<script type="module">
+    try {
+        const { sdk } = await import('https://esm.sh/@farcaster/miniapp-sdk');
+        window.sdk = sdk;
+        await sdk.actions.ready({ disableNativeGestures: true });
+        console.log('✅ Farcaster SDK initialized');
+        
+        // Load Context (Username/FID)
+        const context = await sdk.context;
+        if(context && context.user) {
+            const badge = document.getElementById('fc-identity');
+            badge.style.display = 'flex';
+            badge.innerHTML = `👤 @${context.user.username} (FID: ${context.user.fid})`;
         }
-        return true;
+
+    } catch (error) {
+        console.error('❌ Farcaster SDK failed:', error);
+    }
+</script>
+
+<script>
+    let provider, signer, userAddress;
+
+    // Helper: Add log to UI
+    function log(msg, type = '') {
+        const consoleDiv = document.getElementById('console');
+        const item = document.createElement('div');
+        item.className = `log-item ${type}`;
+        item.innerHTML = msg;
+        consoleDiv.prepend(item);
     }
 
-    async function connect() {
-        if (!checkLibrary()) return;
-        if (!window.ethereum) return alert("Install MetaMask!");
+    async function connectWallet() {
+        if (typeof window.ethereum === 'undefined') {
+            return alert("No wallet found. Open in Warpcast or MetaMask.");
+        }
 
         try {
-            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-            address = accounts[0];
-            
+            // Farcaster injects window.ethereum
             provider = new ethers.providers.Web3Provider(window.ethereum);
+            
+            // Request Access
+            await provider.send("eth_requestAccounts", []);
             signer = provider.getSigner();
+            userAddress = await signer.getAddress();
 
-            document.getElementById('connectBtn').innerText = "Connected";
-            document.getElementById('app').style.display = 'block';
-        } catch (e) {
-            alert("Connection failed: " + e.message);
+            // Switch UI
+            document.getElementById('connectBtn').style.display = 'none';
+            document.getElementById('app-ui').style.display = 'block';
+            log(`Linked: ${userAddress.substring(0,6)}...`, 'success');
+
+        } catch (err) {
+            log(`Connect Error: ${err.message}`, 'error');
         }
     }
 
-    async function startBatch() {
-        const log = document.getElementById('log');
-        const input = document.getElementById('list').value.trim();
-        const lines = input.split('\n');
-
-        let currentNonce = await provider.getTransactionCount(address, "latest");
-
+    async function processMultiSend() {
+        const rawText = document.getElementById('recipientList').value;
+        const lines = rawText.split('\n');
+        
+        // 1. Validate Input
+        const txList = [];
         for (let line of lines) {
-            const [to, amt] = line.split(',');
-            if (!to || !amt) continue;
-
-            try {
-                log.innerText = `Sending to ${to.substring(0,8)}...`;
-                const tx = await signer.sendTransaction({
-                    to: to.trim(),
-                    value: ethers.utils.parseEther(amt.trim()),
-                    nonce: currentNonce
-                });
-                log.innerHTML += `<br>✅ Sent: ${tx.hash.substring(0,10)}...`;
-                currentNonce++;
-            } catch (err) {
-                log.innerHTML += `<br>❌ Failed: ${err.message.substring(0,30)}`;
-                break;
+            const [addr, amt] = line.split(',');
+            if (addr && amt) {
+                try {
+                    ethers.utils.getAddress(addr.trim()); // check address validity
+                    txList.push({ to: addr.trim(), val: amt.trim() });
+                } catch (e) {
+                    log(`Invalid address in line: ${line}`, 'error');
+                }
             }
         }
+
+        if (txList.length === 0) return alert("No valid recipients found.");
+
+        document.getElementById('sendBtn').disabled = true;
+        document.getElementById('sendBtn').innerText = "Processing...";
+
+        // 2. Get Nonce for Sequencing
+        try {
+            let currentNonce = await provider.getTransactionCount(userAddress, "latest");
+
+            for (let txItem of txList) {
+                try {
+                    log(`Sending ${txItem.val} ETH to ${txItem.to.substring(0,6)}...`);
+                    
+                    const tx = await signer.sendTransaction({
+                        to: txItem.to,
+                        value: ethers.utils.parseEther(txItem.val),
+                        nonce: currentNonce
+                    });
+
+                    log(`✅ Sent! <a href="https://basescan.org/tx/${tx.hash}" target="_blank" style="color:#4ade80">View</a>`, 'success');
+                    currentNonce++; // Important: increment for next loop
+
+                } catch (innerErr) {
+                    log(`❌ Failed: ${innerErr.reason || innerErr.message}`, 'error');
+                    // Break loop on error to prevent nonce chaos? 
+                    // Usually safer to break here.
+                    break;
+                }
+            }
+        } catch (err) {
+            log(`System Error: ${err.message}`, 'error');
+        }
+
+        document.getElementById('sendBtn').disabled = false;
+        document.getElementById('sendBtn').innerText = "Send Transactions";
     }
 
-    document.getElementById('connectBtn').onclick = connect;
-    document.getElementById('sendBtn').onclick = startBatch;
+    // Bind Buttons
+    document.getElementById('connectBtn').addEventListener('click', connectWallet);
+    document.getElementById('sendBtn').addEventListener('click', processMultiSend);
 </script>
 
-<script src="https://unpkg.com/ethers@5.7.2/dist/ethers.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
-<script type="module">
-        try {
-            const { sdk } = await import('https://esm.sh/@farcaster/miniapp-sdk');
-            window.sdk = sdk;
-            await sdk.actions.ready({ disableNativeGestures: true });
-            console.log('✅ Farcaster SDK initialized');
-        } catch (error) {
-            console.error('❌ Farcaster SDK failed:', error);
-        }
-</script>
+</body>
+</html>
 </body>
 </html>
 
