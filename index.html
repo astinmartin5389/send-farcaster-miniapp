@@ -167,11 +167,14 @@
             window.dispatchEvent(new Event('sdk-ready'));
         } catch (error) {
             console.error('❌ Farcaster SDK failed:', error);
+            document.getElementById('connectBtn').innerText = 'SDK Failed - Refresh';
         }
     </script>
 
     <script>
         let fcProvider;
+        let farcasterSDK;
+        let isConnected = false;
 
         // Helper for Logs
         const log = (msg) => {
@@ -180,26 +183,39 @@
         };
 
         window.addEventListener('sdk-ready', async () => {
+            // Get the SDK instance
+            farcasterSDK = window.sdk;
+            
             // 1. Load User Context (Top Bar)
             try {
-                const context = await window.sdk.context;
+                const context = await farcasterSDK.context;
                 if (context && context.user) {
                     document.getElementById('topBar').style.visibility = 'visible';
                     document.getElementById('username').innerText = `@${context.user.username}`;
                     document.getElementById('pfp').src = context.user.pfpUrl;
                 }
-            } catch(e) { console.error(e); }
+            } catch(e) { 
+                console.error('Failed to load user context:', e);
+                log('Failed to load user context');
+            }
 
-            // 2. Setup Provider
-            fcProvider = window.sdk.wallet.getEthereumProvider();
-
-            // 3. Auto-Check Connection
+            // 2. Setup Provider using Farcaster SDK
             try {
+                // Get the wallet instance from SDK
+                const wallet = farcasterSDK.wallet;
+                fcProvider = wallet.getEthereumProvider();
+                
+                // Check if already connected
                 const accounts = await fcProvider.request({ method: 'eth_accounts' });
-                if (accounts.length > 0) {
+                if (accounts && accounts.length > 0) {
+                    isConnected = true;
                     showApp();
+                    log('Already connected to wallet');
                 }
-            } catch (e) { console.log("Not connected yet"); }
+            } catch (e) { 
+                console.log("Not connected yet:", e.message);
+                log('Wallet not connected');
+            }
         });
 
         // --- ACTIONS ---
@@ -207,6 +223,7 @@
         function showApp() {
             document.getElementById('connect-view').style.display = 'none';
             document.getElementById('app-view').style.display = 'block';
+            log('Connected! Ready to send.');
         }
 
         function disconnectApp() {
@@ -216,13 +233,38 @@
             document.getElementById('app-view').style.display = 'none';
             document.getElementById('csvInput').value = "";
             document.getElementById('log').innerHTML = "Disconnected.";
+            isConnected = false;
         }
 
         document.getElementById('connectBtn').onclick = async () => {
             try {
-                await fcProvider.request({ method: 'eth_requestAccounts' });
-                showApp();
-            } catch (e) { alert("Connection failed: " + e.message); }
+                if (!farcasterSDK) {
+                    alert("Farcaster SDK not loaded. Please refresh.");
+                    return;
+                }
+
+                // Use Farcaster SDK to connect wallet
+                const wallet = farcasterSDK.wallet;
+                
+                // Request connection
+                const result = await wallet.connect({
+                    silent: false, // Show wallet UI
+                    permissions: ['approveCalls'] // Required for sending transactions
+                });
+                
+                if (result && result.code === 200) {
+                    isConnected = true;
+                    showApp();
+                    log('Wallet connected successfully');
+                } else {
+                    throw new Error('Wallet connection failed');
+                }
+                
+            } catch (e) { 
+                console.error("Connection error:", e);
+                alert("Connection failed: " + (e.message || "Unknown error"));
+                log(`Connection failed: ${e.message}`);
+            }
         };
 
         document.getElementById('disconnectBtn').onclick = disconnectApp;
@@ -246,16 +288,20 @@
                     if (data && data.length > 0) {
                         // Prefer verified address, fallback to custody address
                         const addr = data[0].connectedAddress || data[0].custodyAddress;
+                        if (!addr) {
+                            throw new Error(`No address found for @${username}`);
+                        }
                         log(`Found @${username}: ${addr.substring(0,6)}...`);
                         return addr;
                     } else {
                         throw new Error(`User @${username} not found`);
                     }
                 } catch (err) {
-                    throw new Error(`Could not resolve @${username}`);
+                    throw new Error(`Could not resolve @${username}: ${err.message}`);
                 }
             }
-            return input; // fallback
+            // If it's not an address and doesn't start with @, try to add 0x prefix
+            return input.startsWith('0x') ? input : '0x' + input;
         }
 
         document.getElementById('sendBtn').onclick = async () => {
@@ -264,26 +310,41 @@
             const lines = rawText.split('\n');
             const calls = [];
 
+            // Validate connection
+            if (!isConnected || !fcProvider) {
+                alert("Please connect your wallet first");
+                return;
+            }
+
             btn.disabled = true;
             btn.innerText = "Resolving names...";
 
             try {
+                // Process each line
                 for (let line of lines) {
-                    if (!line.trim()) continue;
+                    line = line.trim();
+                    if (!line) continue;
                     
                     const parts = line.split(',');
-                    if (parts.length !== 2) continue;
+                    if (parts.length !== 2) {
+                        throw new Error(`Invalid format: "${line}". Use: "@username, 0.001" or "0x..., 0.001"`);
+                    }
 
                     let [target, amount] = parts;
                     target = target.trim();
                     amount = amount.trim();
+
+                    // Validate amount
+                    if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+                        throw new Error(`Invalid amount: "${amount}" for ${target}`);
+                    }
 
                     // 1. Resolve Name if needed
                     const finalAddress = await resolveFarcasterName(target);
 
                     // 2. Validate Address
                     if (!ethers.utils.isAddress(finalAddress)) {
-                        throw new Error(`Invalid address: ${target}`);
+                        throw new Error(`Invalid address: ${target} (resolved to: ${finalAddress})`);
                     }
 
                     // 3. Prepare Batch Call
@@ -297,30 +358,67 @@
                 if (calls.length === 0) throw new Error("No valid lines found");
 
                 log(`Batching ${calls.length} transactions...`);
-                btn.innerText = "Requesting Wallet...";
+                btn.innerText = "Confirm in Wallet...";
 
                 // 4. Send Batch (EIP-5792)
-                const txHash = await fcProvider.request({
-                    method: 'wallet_sendCalls',
-                    params: [{
-                        version: '1.0',
-                        chainId: '0x2105', // Base Mainnet (8453)
-                        calls: calls
-                    }]
-                });
+                try {
+                    const txHash = await fcProvider.request({
+                        method: 'wallet_sendCalls',
+                        params: [{
+                            version: '1.0',
+                            chainId: '0x2105', // Base Mainnet (8453)
+                            from: (await fcProvider.request({ method: 'eth_accounts' }))[0],
+                            calls: calls
+                        }]
+                    });
 
-                log(`<span style="color:#4ade80">✅ Batch Sent! ID: ${txHash.substring(0,10)}...</span>`);
-                btn.innerText = "Success";
+                    log(`<span style="color:#4ade80">✅ Batch Sent! Hash: ${txHash.substring(0,10)}...</span>`);
+                    log(`Check wallet for confirmation`);
+                    btn.innerText = "Success!";
+                    
+                    // Clear input on success
+                    document.getElementById('csvInput').value = "";
+                    
+                } catch (walletError) {
+                    // Fallback to individual transactions if batch not supported
+                    console.log("Batch not supported, falling back to individual transactions");
+                    log("Batch not supported, sending individually...");
+                    
+                    for (let i = 0; i < calls.length; i++) {
+                        const call = calls[i];
+                        btn.innerText = `Sending ${i+1}/${calls.length}...`;
+                        
+                        try {
+                            const tx = await fcProvider.request({
+                                method: 'eth_sendTransaction',
+                                params: [{
+                                    to: call.to,
+                                    value: call.value,
+                                    data: "0x"
+                                }]
+                            });
+                            log(`Sent ${i+1}: ${tx.substring(0,10)}...`);
+                        } catch (indivError) {
+                            throw new Error(`Failed on transaction ${i+1}: ${indivError.message}`);
+                        }
+                    }
+                    
+                    log(`<span style="color:#4ade80">✅ All ${calls.length} transactions sent!</span>`);
+                    btn.innerText = "Success!";
+                }
 
             } catch (err) {
-                console.error(err);
+                console.error('Send error:', err);
                 log(`<span style="color:#ef4444">❌ Error: ${err.message}</span>`);
                 btn.innerText = "Retry";
+                alert(`Error: ${err.message}`);
             }
             
-            setTimeout(() => { btn.disabled = false; if(btn.innerText === "Success") btn.innerText = "Send Batch"; }, 3000);
+            setTimeout(() => { 
+                btn.disabled = false; 
+                if(btn.innerText.includes("Success")) btn.innerText = "Send Batch"; 
+            }, 3000);
         };
     </script>
 </body>
 </html>
-
