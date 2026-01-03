@@ -3,142 +3,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Base Simple Multi-Sender</title>
-    <script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js"></script>
+    <title>Base Multi-Send Pro</title>
+    <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js" type="application/javascript"></script>
     <style>
-        :root { --accent: #0052FF; --bg: #0f172a; --card: #1e293b; --text: #f8fafc; }
-        body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-        .container { width: 100%; max-width: 480px; background: var(--card); padding: 32px; border-radius: 20px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid #334155; }
-        h1 { font-size: 24px; text-align: center; color: var(--accent); margin-top: 0; }
-        .btn { width: 100%; background: var(--accent); color: white; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-weight: 700; font-size: 16px; transition: all 0.2s; }
-        .btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
-        .btn:active { transform: translateY(0); }
-        .btn:disabled { background: #475569; cursor: not-allowed; }
-        #appSection { display: none; margin-top: 24px; }
-        label { display: block; font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; }
-        textarea { width: 100%; height: 140px; background: #0f172a; border: 1px solid #334155; color: #38bdf8; padding: 12px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 13px; resize: none; box-sizing: border-box; }
-        .log { margin-top: 20px; font-size: 12px; color: #94a3b8; background: #00000044; padding: 10px; border-radius: 8px; height: 100px; overflow-y: auto; border: 1px dashed #334155; }
-        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #ffffff11; padding-bottom: 2px; }
-        .success { color: #4ade80; }
-        .error { color: #f87171; }
+        :root { --base: #0052FF; --dark: #0f172a; --card: #1e293b; }
+        body { font-family: 'Inter', sans-serif; background: var(--dark); color: white; display: flex; justify-content: center; padding: 40px; margin: 0; }
+        .container { width: 100%; max-width: 450px; background: var(--card); padding: 30px; border-radius: 16px; border: 1px solid #334155; }
+        .btn { width: 100%; background: var(--base); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-bottom: 15px; }
+        textarea { width: 100%; height: 120px; background: #0f172a; color: #38bdf8; border: 1px solid #475569; padding: 12px; border-radius: 8px; font-family: monospace; box-sizing: border-box; }
+        .log { font-size: 12px; color: #94a3b8; background: #000; padding: 10px; border-radius: 8px; height: 80px; overflow-y: auto; margin-top: 15px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>Base Multi-Send</h1>
-    <p id="statusMsg" style="text-align: center; font-size: 14px; color: #94a3b8;">Connect your wallet to get started</p>
-    
+    <h2 style="text-align:center">Base Multi-Sender</h2>
     <button id="connectBtn" class="btn">Connect MetaMask</button>
 
-    <div id="appSection">
-        <label>Recipient List (Address, Amount)</label>
-        <textarea id="listInput" placeholder="0x742d... , 0.01&#10;0x123c... , 0.005"></textarea>
-        
-        <button id="sendBtn" class="btn" style="margin-top: 15px;">Send Transactions</button>
-        
-        <div id="logConsole" class="log">
-            <div class="log-entry">Waiting for input...</div>
-        </div>
+    <div id="mainApp" style="display:none">
+        <label style="font-size: 12px; color: #94a3b8;">Format: address, amount (one per line)</label>
+        <textarea id="inputList" placeholder="0x123..., 0.01&#10;0x456..., 0.02"></textarea>
+        <button id="sendBtn" class="btn" style="margin-top:15px">Confirm & Send All</button>
+        <div id="statusLog" class="log">Ready to send...</div>
     </div>
 </div>
 
 <script>
-    let provider, signer, userAddress;
+    let provider, signer, myAddr;
 
-    // --- 1. CONNECT FUNCTION ---
-    async function initWallet() {
-        if (typeof window.ethereum === 'undefined') {
-            return alert("MetaMask not found! Please install it or use a Web3 browser.");
+    // Wait for the window to load to ensure 'ethers' library is present
+    window.onload = function() {
+        if (typeof ethers === 'undefined') {
+            alert("Ethers.js library not loaded! Please check your internet connection.");
+            return;
         }
+        console.log("Ethers.js loaded successfully.");
+    };
 
+    async function connect() {
+        if (!window.ethereum) return alert("Install MetaMask!");
+        
         try {
-            // Request account access
+            // Request accounts
             const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-            userAddress = accounts[0];
-            
-            // Switch to Base Chain (ChainID: 8453) if not already there
-            try {
-                await window.ethereum.request({
-                    method: 'wallet_switchEthereumChain',
-                    params: [{ chainId: '0x2105' }], // 8453 in Hex
-                });
-            } catch (switchError) {
-                console.log("Could not switch to Base automatically.");
-            }
+            myAddr = accounts[0];
 
+            // Set up Provider and Signer
             provider = new ethers.providers.Web3Provider(window.ethereum);
             signer = provider.getSigner();
 
-            // Update UI
-            document.getElementById('connectBtn').style.display = 'none';
-            document.getElementById('statusMsg').innerHTML = `Connected: <b>${userAddress.substring(0,6)}...${userAddress.substring(38)}</b>`;
-            document.getElementById('appSection').style.display = 'block';
-
-        } catch (err) {
-            console.error(err);
-            alert("Connection failed: " + err.message);
+            document.getElementById('connectBtn').innerText = "Connected: " + myAddr.substring(0,6) + "...";
+            document.getElementById('mainApp').style.display = 'block';
+        } catch (e) {
+            console.error(e);
         }
     }
 
-    // --- 2. MULTI-SEND LOGIC ---
-    async function runMultiSend() {
-        const input = document.getElementById('listInput').value.trim();
-        if (!input) return alert("Please enter at least one recipient.");
+    async function startSending() {
+        const list = document.getElementById('inputList').value.split('\n');
+        const log = document.getElementById('statusLog');
+        
+        // Manual Nonce Management for consecutive transactions
+        let currentNonce = await provider.getTransactionCount(myAddr, "latest");
 
-        const lines = input.split('\n');
-        const log = document.getElementById('logConsole');
-        log.innerHTML = ""; // Clear log
-
-        document.getElementById('sendBtn').disabled = true;
-        document.getElementById('sendBtn').innerText = "Processing...";
-
-        // Get starting nonce to prevent "Replacement Transaction Underpriced" errors
-        let currentNonce = await provider.getTransactionCount(userAddress, "latest");
-
-        for (let line of lines) {
-            const [rawAddr, rawAmt] = line.split(',');
-            if (!rawAddr || !rawAmt) continue;
-
-            const targetAddr = rawAddr.trim();
-            const amountStr = rawAmt.trim();
-
-            addLog(`Requesting ${amountStr} ETH to ${targetAddr.substring(0,8)}...`);
+        for (let entry of list) {
+            const [to, amt] = entry.split(',');
+            if (!to || !amt) continue;
 
             try {
+                log.innerHTML = `Confirming ${amt} to ${to.substring(0,8)}...`;
+                
                 const tx = await signer.sendTransaction({
-                    to: targetAddr,
-                    value: ethers.utils.parseEther(amountStr),
+                    to: to.trim(),
+                    value: ethers.utils.parseEther(amt.trim()),
                     nonce: currentNonce
                 });
 
-                addLog(`Sent! Hash: <a href="https://basescan.org/tx/${tx.hash}" target="_blank" style="color:#38bdf8">${tx.hash.substring(0,10)}...</a>`, "success");
-                
-                // Increment nonce for the next one in the loop
-                currentNonce++;
-
+                log.innerHTML = `Sent! Hash: ${tx.hash.substring(0,10)}...`;
+                currentNonce++; // Increment nonce for the next confirm popup
             } catch (err) {
-                addLog(`Failed: ${err.reason || "User rejected"}`, "error");
-                // We stop the loop if an error occurs to prevent nonce confusion
-                break; 
+                log.innerHTML = `<span style="color:red">Error: ${err.message.substring(0,40)}</span>`;
+                break;
             }
         }
-
-        document.getElementById('sendBtn').disabled = false;
-        document.getElementById('sendBtn').innerText = "Send Transactions";
     }
 
-    function addLog(msg, type = "") {
-        const log = document.getElementById('logConsole');
-        const entry = document.createElement('div');
-        entry.className = `log-entry ${type}`;
-        entry.innerHTML = `> ${msg}`;
-        log.prepend(entry);
-    }
-
-    // Event Listeners
-    document.getElementById('connectBtn').addEventListener('click', initWallet);
-    document.getElementById('sendBtn').addEventListener('click', runMultiSend);
+    document.getElementById('connectBtn').addEventListener('click', connect);
+    document.getElementById('sendBtn').addEventListener('click', startSending);
 </script>
 
 </body>
