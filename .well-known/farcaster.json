@@ -1,0 +1,21 @@
+{
+  "frame": {
+    "name": "SEND",
+    "version": "1",
+    "iconUrl": "https://test-lemon-five-21.vercel.app/splash.png",
+    "homeUrl": "https://test-lemon-five-21.vercel.app",
+    "imageUrl": "https://test-lemon-five-21.vercel.app/splash.png",
+    "buttonTitle": "SEND",
+    "splashImageUrl": "https://test-lemon-five-21.vercel.app/splash.png",
+    "splashBackgroundColor": "#000000",
+    "webhookUrl": "https://test-lemon-five-21.vercel.app/api/webhook",
+    "subtitle": "SEND",
+    "description": "send",
+    "primaryCategory": "finance",
+    "heroImageUrl": "https://test-lemon-five-21.vercel.app/splash.png",
+    "tags": [
+      "finance"
+    ],
+    "tagline": "finance "
+  }
+}
