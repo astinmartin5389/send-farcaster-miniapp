@@ -3,123 +3,90 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Base Web3 Analyzer</title>
+    <title>Base Simple Multi-Sender</title>
     <script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js"></script>
     <style>
-        :root { --base-blue: #0052FF; --bg: #0a0b0d; --card: #1a1c20; --text: #ffffff; }
-        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); display: flex; justify-content: center; padding: 40px; }
-        .container { width: 100%; max-width: 600px; background: var(--card); padding: 30px; border-radius: 16px; border: 1px solid #333; }
-        .btn { background: var(--base-blue); color: white; border: none; padding: 15px; border-radius: 8px; width: 100%; font-weight: bold; cursor: pointer; transition: 0.3s; }
-        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }
-        .stat-box { background: #25282e; padding: 15px; border-radius: 10px; text-align: center; }
-        .stat-box span { display: block; font-size: 24px; font-weight: bold; color: var(--base-blue); }
-        .tx-list { margin-top: 20px; font-size: 14px; }
-        .tx-item { padding: 10px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
-        .label { color: #888; font-size: 12px; margin-bottom: 5px; }
-        #loader { display: none; color: var(--base-blue); text-align: center; margin: 10px; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; display: flex; justify-content: center; padding: 50px; }
+        .card { width: 450px; background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5); }
+        h2 { text-align: center; color: #38bdf8; margin-bottom: 20px; }
+        textarea { width: 100%; height: 120px; background: #334155; border: 1px solid #475569; color: white; padding: 12px; border-radius: 8px; font-family: monospace; resize: none; box-sizing: border-box; }
+        .btn { width: 100%; background: #0284c7; color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-top: 15px; font-size: 16px; }
+        .btn:hover { background: #0369a1; }
+        .log { margin-top: 20px; font-size: 13px; max-height: 150px; overflow-y: auto; color: #94a3b8; }
+        .status-success { color: #4ade80; }
+        .status-pending { color: #fbbf24; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2 style="text-align: center;">Base Chain dApp</h2>
-    <button id="connectBtn" class="btn">Connect MetaMask</button>
+<div class="card">
+    <h2>Multi-Sender (No Contract)</h2>
+    <button id="connectBtn" class="btn">Connect Wallet</button>
 
-    <div id="app" style="display: none; margin-top: 20px;">
-        <div class="label">Wallet Connected</div>
-        <code id="addr" style="font-size: 12px; color: #aaa;"></code>
-
-        <div class="stat-grid">
-            <div class="stat-box">
-                <p class="label">Total TXs</p>
-                <span id="txCount">0</span>
-            </div>
-            <div class="stat-box">
-                <p class="label">Gas Spent (ETH)</p>
-                <span id="gasSpent">0.00</span>
-            </div>
-        </div>
-
-        <div id="loader">Fetching Base Data...</div>
-
-        <h3>Recent Base Activity</h3>
-        <div id="txContainer" class="tx-list"></div>
+    <div id="ui" style="display:none; margin-top:20px;">
+        <label style="font-size: 12px; color: #94a3b8;">Enter Recipient, Amount (One per line)</label>
+        <textarea id="list" placeholder="0x123..., 0.01&#10;0x456..., 0.02"></textarea>
+        
+        <button id="sendBtn" class="btn">Send Transactions</button>
+        
+        <div id="log" class="log"></div>
     </div>
 </div>
 
 <script>
-    // Your Etherscan API Key
-    const API_KEY = "JQKNJENDUB5196UFQ6GZFDS6CRC4RHHSD9"; 
-    // Etherscan V2 API Base URL
-    const API_BASE = "https://api.etherscan.io/v2/api";
-    const CHAIN_ID = "8453"; // 8453 = Base Mainnet
-
-    let address;
+    let provider, signer, address;
 
     async function connect() {
-        if (!window.ethereum) return alert("Install MetaMask");
+        if (!window.ethereum) return alert("Please install MetaMask");
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        signer = provider.getSigner();
+        address = await signer.getAddress();
         
-        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-        address = accounts[0];
-        
-        document.getElementById('connectBtn').style.display = 'none';
-        document.getElementById('app').style.display = 'block';
-        document.getElementById('addr').innerText = address;
-
-        fetchData();
+        document.getElementById('connectBtn').innerText = "Connected: " + address.substring(0,6) + "...";
+        document.getElementById('ui').style.display = 'block';
     }
 
-    async function fetchData() {
-        document.getElementById('loader').style.display = 'block';
-        
-        // V2 Syntax: chainid + module + action + address + apikey
-        const url = `${API_BASE}?chainid=${CHAIN_ID}&module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&sort=desc&apikey=${API_KEY}`;
+    async function sendMulti() {
+        const lines = document.getElementById('list').value.split('\n');
+        const logDiv = document.getElementById('log');
+        logDiv.innerHTML = "Starting process...";
 
-        try {
-            const res = await fetch(url);
-            const data = await res.json();
-            
-            if (data.status === "1") {
-                processAnalysis(data.result);
-            } else {
-                alert("API Error: " + data.message);
+        // 1. Get current Nonce (important for sequence)
+        let currentNonce = await provider.getTransactionCount(address, "pending");
+
+        for (let line of lines) {
+            const [to, amt] = line.split(',');
+            if (!to || !amt) continue;
+
+            try {
+                const txRequest = {
+                    to: to.trim(),
+                    value: ethers.utils.parseEther(amt.trim()),
+                    nonce: currentNonce // Manual nonce ensures they don't overwrite each other
+                };
+
+                logDiv.innerHTML += `<div class="status-pending">Requesting ${amt} ETH to ${to.substring(0,6)}...</div>`;
+                
+                // Send transaction
+                const tx = await signer.sendTransaction(txRequest);
+                
+                logDiv.innerHTML += `<div class="status-success">Sent! Hash: ${tx.hash.substring(0,10)}...</div>`;
+                
+                // Increment nonce for the next transaction in the loop
+                currentNonce++; 
+
+            } catch (err) {
+                logDiv.innerHTML += `<div style="color:#f87171">Error: ${err.message.substring(0,50)}...</div>`;
+                break; // Stop loop if user rejects or error occurs
             }
-        } catch (e) {
-            console.error(e);
         }
-        document.getElementById('loader').style.display = 'none';
-    }
-
-    function processAnalysis(txs) {
-        let totalGasETH = 0;
-        const container = document.getElementById('txContainer');
-        container.innerHTML = "";
-
-        txs.forEach((tx, index) => {
-            // Calculate gas for every transaction
-            const fee = (parseInt(tx.gasUsed) * parseInt(tx.gasPrice)) / 1e18;
-            totalGasETH += fee;
-
-            // Only display the first 5 in the UI list
-            if (index < 5) {
-                const type = tx.input === "0x" ? "Transfer" : "Contract Call";
-                const item = `
-                    <div class="tx-item">
-                        <span>${type} <br><small style="color:#666">${tx.hash.substring(0,10)}...</small></span>
-                        <span style="text-align:right">${parseFloat(ethers.utils.formatEther(tx.value)).toFixed(4)} ETH <br> 
-                        <small style="color:${tx.isError === '0' ? '#4caf50' : '#f44336'}">${tx.isError === '0' ? 'Success' : 'Failed'}</small></span>
-                    </div>`;
-                container.innerHTML += item;
-            }
-        });
-
-        document.getElementById('txCount').innerText = txs.length;
-        document.getElementById('gasSpent').innerText = totalGasETH.toFixed(5);
     }
 
     document.getElementById('connectBtn').addEventListener('click', connect);
+    document.getElementById('sendBtn').addEventListener('click', sendMulti);
 </script>
 
 </body>
 </html>
+
